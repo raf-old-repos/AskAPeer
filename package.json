@@ -1,0 +1,11 @@
+{
+  "name": "askapeer",
+  "version": "0.0.1",
+  "description": "A Q&A platform for college students",
+  "scripts": {
+    "frontend": "cd packages/frontend && npm start",
+    "backend": "cd packages/api && npm start"
+  },
+  "author": "Rafayel Amirkhanyan",
+  "license": "MIT"
+}
