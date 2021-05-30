@@ -19,3 +19,26 @@ Content-Type: application/json
     "username": "test",
     "password": "test123"
 }
+
+###
+
+# Invalid login
+
+POST http://localhost:4000/auth/login 
+Content-Type: application/json
+
+{
+    "email": "exa@example.com",
+    "username": "test",
+    "password": "test123"
+}
+
+###
+
+# Check auth
+
+GET http://localhost:4000/auth/check-auth-status/
+Content-Type: application/json
+
+
+
