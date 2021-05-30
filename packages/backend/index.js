@@ -6,8 +6,6 @@ const Storm = require("stormdb");
 const bcrypt = require("bcrypt");
 const express = require("express");
 const { nanoid } = require("nanoid");
-const passwordValidator = require("password-validator");
-const emailValidator = require("email-validator");
 const jwt = require("jsonwebtoken");
 const PORT = process.env.PORT || 4001;
 
@@ -31,21 +29,38 @@ app.use(express.static(path.join(__dirname, "client/build")));
 
 // Utils
 
-const passwordCriteria = new passwordValidator();
-passwordCriteria
-  .is()
-  .min(8)
-  .is()
-  .max(32)
-  .has()
-  .uppercase(1)
-  .has()
-  .lowercase(1)
-  .has()
-  .digits(1)
-  .has()
-  .not()
-  .spaces();
+// Probably should've used this for auth but I was tired ok
+const getCurrent = (dbVal, prop, reqInfo) => {
+  const currentVal = db.get(dbVal).value();
+
+  if (currentVal.length != 0) {
+    return currentVal.find((match) => match[prop] == reqInfo);
+  } else if (currentVal == undefined) {
+    return undefined;
+  }
+};
+
+const getCurrentQuestion = (id) => {
+  const currentVal = db.get("questions").value();
+
+  if (currentVal.length != 0) {
+    return currentVal.find((match) => match["_id"] == id);
+  } else if (currentVal == undefined) {
+    return undefined;
+  }
+};
+
+
+const protectedRoute = (req, res, callback) => {
+  const token = req.header("auth-token");
+
+  if (!token) {
+    return res.status(401).send("Access denied");
+  }
+
+  req.user = jwt.verify(token, process.env.jwtKey);
+  callback(res);
+};
 
 // Routes
 
@@ -65,16 +80,17 @@ app.post("/auth/create-user", async (req, res) => {
   const { email, username, password, role } = req.body;
   try {
     // Finding the matching user
-    const emailMatch = db
-      .get("users")
-      .value()
-      .find((match) => match["email"] == email);
+    const emailValue = db.get("users").value();
+
+    if (emailValue.length != 0) {
+      const emailMatch = emailValue.find((match) => match["email"] == email);
+      if (emailMatch.email == email) {
+        res.status(400).send({ message: "Email already exists" });
+        throw new Error("Email already exists");
+      }
+    }
 
     // Checking if the email already exists in the DB
-    if (emailMatch.email == email) {
-      res.status(400).send({ message: "Email already exists" });
-      throw new Error("Email already exists");
-    }
 
     const type = "user";
 
@@ -89,6 +105,7 @@ app.post("/auth/create-user", async (req, res) => {
       username: username,
       password: hashedPassword,
       role: role,
+      questions: {},
     };
 
     db.get("users").push(user);
@@ -175,6 +192,8 @@ app.post("/auth/login", async (req, res) => {
 });
 
 // Checks auth status
+
+// !REQUIRES EMAIL
 app.get("/auth/check-auth-status", (req, res) => {
   const clientAuth = req.header("auth-token");
 
@@ -196,20 +215,138 @@ app.get("/auth/protected-route", (req, res) => {
   });
 });
 
-// Jank protected route function
-const protectedRoute = (req, res, callback) => {
-  const token = req.header("auth-token");
+// Data routes
 
-  if (!token) {
-    return res.status(401).send("Access denied");
-  }
+// Post a question
+app.post("/api/question", (req, res) => {
+  const { email, id, title, body, tags } = req.body;
+
   try {
-    req.user = jwt.verify(token, process.env.jwtKey);
-    callback(res);
+    protectedRoute(req, res, async (res) => {
+      const currentQuestion = getCurrentQuestion(id);
+
+      if (currentQuestion != undefined) {
+        if (currentQuestion._id == id) {
+          res.status(400).send({
+            success: false,
+            message: "Question already exists",
+          });
+          throw new Error("Question already exists");
+        }
+      }
+
+      db.get("questions").push({
+        _id: id,
+        title: title,
+        body: body,
+        tags: tags,
+        date: Date(),
+        answers: [],
+      });
+
+      await db.save();
+
+      res.status(201).send({
+        success: true,
+        message: "Posted question",
+      });
+    });
   } catch (error) {
-    res.status(400).send("Invalid token");
+    console.error(error);
   }
-};
+});
+
+// Get question
+
+app.get("/api/question/:id", (req, res) => {
+  const id = req.params.id;
+
+  try {
+    protectedRoute(req, res, (res) => {
+      const target = db
+        .get("questions")
+        .value()
+        .find((match) => match["_id"] == id);
+
+      res.status(201).send({
+        success: true,
+        message: target,
+      });
+    });
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+// Answer a question
+app.post("/api/question/:id/answer", (req, res) => {
+  const id = req.params.id;
+
+  const { author, body } = req.body;
+  try {
+    protectedRoute(req, res, async (res) => {
+      const targetIndex = db
+        .get("questions")
+        .value()
+        .findIndex((match) => match["_id"] == id);
+
+      db.get("questions").get(targetIndex).get("answers").push({
+        author: author,
+        body: body,
+        date: Date(),
+      });
+
+      await db.save();
+
+      res.status(201).send({
+        success: true,
+        message: "Posted answer",
+      });
+    });
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+// A feed of posts
+app.get("/api/feed", (req, res) => {
+  try {
+    protectedRoute(req, res, (res) => {
+      const data = db.get("questions").value();
+      res.status(201).send({
+        success: true,
+        data: data,
+      });
+    });
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+// Get current user info
+
+app.get("/api/me", (req, res) => {
+  const { email } = req.body;
+
+  try {
+    protectedRoute(req, res, (res) => {
+      const user = db
+        .get("users")
+        .value()
+        .find((match) => {
+          match["email"] == email;
+        });
+
+      res.status(201).send({
+        success: true,
+        data: user,
+      });
+    });
+  } catch (error) {
+    console.error(error);
+  }
+});
+
 app.get("*", (req, res) =>
   res.sendFile(path.join(__dirname, "/client/build/index.html"))
 );
